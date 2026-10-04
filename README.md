@@ -6,17 +6,23 @@ Integer-only Gauss-Jordan solver for up to 10 variables. It prints every row ope
 - Several modes: replay a seed, search for the best run, fewest steps, smallest numbers, or a size-vs-steps trade-off.
 - Every solution is verified (`Check: ok`).
 
-## Download
+**Contents:** [Linux](#linux) | [macOS](#macos) | [Windows](#windows) | [Android (Termux)](#android-termux) | [Input](#input) | [Modes](#seed--modes) | [Example](#example) | [Limits](#limits) | [Notes](#notes)
 
-Get a build from the [latest release](https://github.com/cryMises/cgjsolver/releases/latest):
+Prebuilt files are on the [latest release](https://github.com/cryMises/cgjsolver/releases/latest):
 
-| File | System |
+| File | Runs on |
 |---|---|
-| `gjsolver-linux` | Linux x86-64 |
-| `gjsolver-macos` | Apple Silicon Macs |
-| `gjsolver.exe` | Windows 64-bit |
+| `gjsolver-linux` | Linux, x86-64 (64-bit Intel/AMD) |
+| `gjsolver-macos` | macOS, Apple Silicon (M1 and newer) |
+| `gjsolver.exe` | Windows, 64-bit (x64; ARM Windows via emulation) |
 
-**Linux / macOS:**
+A prebuilt file only runs on the system and CPU type it was built for. Anywhere else, build from source.
+
+---
+
+## Linux
+
+### Option 1: prebuilt binary (x86-64 only)
 
 ```
 curl -L -o gjsolver https://github.com/cryMises/cgjsolver/releases/latest/download/gjsolver-linux
@@ -24,26 +30,119 @@ chmod +x gjsolver
 ./gjsolver
 ```
 
-Use `gjsolver-macos` in the URL on a Mac. If macOS blocks the file, run `xattr -d com.apple.quarantine gjsolver`.
+On a Raspberry Pi or other ARM Linux machine this fails with `Exec format error`. Use Option 2.
 
-**Windows:** run `gjsolver.exe` from Command Prompt. SmartScreen may warn because the file is unsigned: choose More info, then Run anyway.
+### Option 2: compile from source
 
-**Android (Termux), Raspberry Pi, older Intel Macs:** the downloads will not run there. Build from source (below).
+1. Install a compiler if you don't have one:
 
-## Build from source
+   | Distro | Command |
+   |---|---|
+   | Debian / Ubuntu | `sudo apt install gcc curl` |
+   | Fedora | `sudo dnf install gcc curl` |
+   | Arch | `sudo pacman -S gcc curl` |
 
-```
-gcc -O2 -o gjsolver gjsolver.c
-```
-
-One line, straight from GitHub:
+2. Compile and run:
 
 ```
 curl -sL https://raw.githubusercontent.com/cryMises/cgjsolver/main/gjsolver.c | gcc -O2 -x c - -o gjsolver && ./gjsolver
 ```
 
-- Termux: use `clang` instead of `gcc` (`pkg install clang curl`).
-- Windows: use 64-bit MinGW (`gcc -O2 -static -o gjsolver.exe gjsolver.c`). MSVC is not supported, and 32-bit MinGW cannot build it, because the code uses `__int128` and `__builtin_mul_overflow`.
+Or, with the file already downloaded: `gcc -O2 -o gjsolver gjsolver.c`
+
+---
+
+## macOS
+
+### Option 1: prebuilt binary (Apple Silicon only)
+
+```
+curl -L -o gjsolver https://github.com/cryMises/cgjsolver/releases/latest/download/gjsolver-macos
+chmod +x gjsolver
+./gjsolver
+```
+
+If macOS refuses to open the file, remove the quarantine flag:
+
+```
+xattr -d com.apple.quarantine gjsolver
+```
+
+Or open **System Settings > Privacy & Security** and choose **Open Anyway** after the first attempt.
+
+This file will not run on Intel Macs. Use Option 2.
+
+### Option 2: compile from source (Apple Silicon and Intel)
+
+1. Install Apple's command line tools (includes the compiler):
+
+```
+xcode-select --install
+```
+
+2. Compile and run:
+
+```
+curl -sL https://raw.githubusercontent.com/cryMises/cgjsolver/main/gjsolver.c | clang -O2 -x c - -o gjsolver && ./gjsolver
+```
+
+Or, with the file already downloaded: `clang -O2 -o gjsolver gjsolver.c`
+
+On macOS `gcc` is an alias for clang, so either name works. Do not use `-static` on macOS; it is not supported.
+
+---
+
+## Windows
+
+### Option 1: prebuilt binary (64-bit)
+
+1. Download `gjsolver.exe` from the [latest release](https://github.com/cryMises/cgjsolver/releases/latest).
+2. Open **Command Prompt** or **PowerShell** in the folder where you saved it.
+3. Run it:
+   - Command Prompt: `gjsolver.exe`
+   - PowerShell: `.\gjsolver.exe`
+
+Don't double-click it: the window closes as soon as the program finishes.
+
+Windows SmartScreen may warn because the file is unsigned. Choose **More info**, then **Run anyway**.
+
+### Option 2: compile from source
+
+1. Install a 64-bit MinGW-w64 `gcc`. The simplest way is MSYS2:
+   - Install MSYS2 from https://www.msys2.org
+   - Open the **MSYS2 UCRT64** terminal and run: `pacman -S mingw-w64-ucrt-x86_64-gcc`
+   - Either work inside that terminal, or add `C:\msys64\ucrt64\bin` to your Windows `PATH` to use `gcc` from Command Prompt and PowerShell.
+
+2. Compile and run:
+
+   **Command Prompt:**
+   ```
+   curl -sL https://raw.githubusercontent.com/cryMises/cgjsolver/main/gjsolver.c | gcc -O2 -static -x c - -o gjsolver.exe && gjsolver.exe
+   ```
+
+   **PowerShell** (`curl` is an alias there, so use `curl.exe`, and avoid the pipe):
+   ```
+   curl.exe -sLO https://raw.githubusercontent.com/cryMises/cgjsolver/main/gjsolver.c; gcc -O2 -static -o gjsolver.exe gjsolver.c; .\gjsolver.exe
+   ```
+
+   **File already downloaded:** `gcc -O2 -static -o gjsolver.exe gjsolver.c`
+
+`-static` builds the runtime into the exe so it does not need extra DLLs on other machines.
+
+**Not supported on Windows:** MSVC (Visual Studio's compiler) and 32-bit MinGW. The code uses `__int128` and `__builtin_mul_overflow`, which they lack.
+
+---
+
+## Android (Termux)
+
+The release downloads do not run on Android (the CPU is ARM). Compile instead:
+
+```
+pkg install clang curl
+curl -sL https://raw.githubusercontent.com/cryMises/cgjsolver/main/gjsolver.c | clang -O2 -x c - -o gjsolver && ./gjsolver
+```
+
+---
 
 ## Input
 
@@ -58,7 +157,12 @@ a1 a2 ... an b
 - Integers only. Clear fractions first (x/2 + y = 3 becomes x + 2y = 6).
 - The system must be square with a unique solution, otherwise you get `Singular: no unique solution.`
 
-Run the program with no input to see this guide. To avoid retyping, save the input in a file and run `./gjsolver < input.txt`.
+Run the program with no input to see this guide. To avoid retyping, save the input in a file:
+
+| Shell | Command |
+|---|---|
+| Linux, macOS, Termux, Command Prompt | `./gjsolver < input.txt` (Windows: `gjsolver.exe < input.txt`) |
+| PowerShell | `Get-Content input.txt \| .\gjsolver.exe` |
 
 ## Seed / modes
 
@@ -130,3 +234,4 @@ Set by constants at the top of `gjsolver.c`:
 - Dense systems with n = 9 or 10 rarely fit within n^2 + n steps and entries <= 99999. Sparse systems often do. The "Within limits" line in `-1` shows how many seeds qualified.
 - For `-2`, `-3` and `-4`, "Not proven (limit hit)" means the time or node limit stopped the search early, so a better plan may exist. Results at n >= 9 can vary with machine speed because of the time limit.
 - Solutions are always checked, so a plan that is not optimal is still correct.
+- Only run one-line install commands on code you trust: they compile and run whatever the link serves.
