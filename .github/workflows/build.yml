@@ -1,0 +1,28 @@
+name: build
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            out: gjsolver-linux
+            cmd: gcc -O2 -static -o gjsolver-linux gjsolver.c
+          - os: macos-latest
+            out: gjsolver-macos
+            cmd: clang -O2 -o gjsolver-macos gjsolver.c
+          - os: windows-latest
+            out: gjsolver.exe
+            cmd: gcc -O2 -static -o gjsolver.exe gjsolver.c
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: ${{ matrix.cmd }}
+        shell: bash
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.out }}
