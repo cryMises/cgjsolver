@@ -9,10 +9,20 @@ typedef long long ll;
 /* largest number of variables; above 10 the numbers overflow 64 bits for
  * ordinary inputs */
 #define MAX 10
-/* largest entry accepted by -1 and -4 */
-#define LIM_PEAK 99999
-/* most steps accepted by -1: n^2+n */
-#define LIM_STEPS (n * n + n)
+/* -1 sets its limits to the "bottom 2.5%" rows of its own steps and entries
+ * tables (mu - 2 sigma), so they are known only after the seeds are run.
+ * -4 has no seed statistics and keeps this fixed fit instead, fitted to the
+ * average of the 10 rarest (lowest) results per random dense system,
+ * coefficients -9..9, n = 1..10:
+ *   steps   <= n^2 * (1 + n / STEPS_DIV)
+ *   entries <= max(PEAK_FLOOR, 10^(PEAK_SLOPE * n - PEAK_SHIFT)) */
+#define STEPS_DIV 20
+#define PEAK_SLOPE 2.0
+#define PEAK_SHIFT 6.5
+#define PEAK_FLOOR 100
+/* the two limits for the current n, set once n is read */
+#define LIM_PEAK lim_peak
+#define LIM_STEPS lim_steps
 /* -1 always checks at least this many seeds */
 #define MIN_TRIES 1000000u
 /* -1 gives up after this many seeds */
@@ -46,6 +56,21 @@ static const ll POLICY[NPOL] = {0, 1000, 100000, 100000000LL,
 static const char *PNAME[NPOL] = {"every row", "entries > 1e3", "entries > 1e5",
                                   "entries > 1e8", "never"};
 
+/* rows of the steps and entries tables in the -1 table: mu-2sigma, mu-sigma,
+ * mu, mu+sigma, mu+2sigma (labelled bottom 2.5% ... top 97.5%), where mu and
+ * sigma are the mean and standard deviation of this run's own seeds (steps: of
+ * the step counts; entries: of log10 of the largest entry, so the entry rows
+ * are mu * 10^(k*sigma)) */
+#define NFORM 5
+#define NSTEPF 5
+static const char *SIGL[NFORM] = {"bottom 2.5%", "bottom 16%", "middle 50%",
+                                  "top 84%", "top 97.5%"};
+/* width of the label column in the -1 tables */
+#define LABW 28
+/* -1 prints entries from this size up in scientific notation, smaller ones in
+ * full */
+#define SCI_FROM 1000000
+
 static ll big_limit = BIG;
 
 int n;
@@ -53,6 +78,81 @@ ll orig[MAX][MAX + 1];
 ll a[MAX][MAX + 1];
 int verbose = 1;
 ll peak;
+static double lim_peak;
+static int lim_steps;
+
+static void sci(char *b, size_t len, double v) {
+  if (v < SCI_FROM)
+    snprintf(b, len, "%.0f", v);
+  else
+    snprintf(b, len, "%.2e", v);
+}
+
+static double my_ln(double x) {
+  double z = (x - 1) / (x + 1), z2 = z * z, t = z, sum = 0;
+  for (int i = 1; i < 400; i += 2) {
+    sum += t / i;
+    t *= z2;
+  }
+  return 2 * sum;
+}
+
+static double my_exp(double t) {
+  int k = 0;
+  while (t > 0.5 || t < -0.5) {
+    t /= 2;
+    k++;
+  }
+  double term = 1, sum = 1;
+  for (int i = 1; i < 20; i++) {
+    term *= t / i;
+    sum += term;
+  }
+  while (k--)
+    sum *= sum;
+  return sum;
+}
+
+static double my_pow(double x, double y) { return my_exp(y * my_ln(x)); }
+
+/* 10^l as a long long, rounded and clamped so it cannot overflow */
+static ll pow10_ll(double l) {
+  double v = my_pow(10.0, l) + 0.5;
+  return v >= 9.2e18 ? LLONG_MAX : (ll)v;
+}
+
+static double my_sqrt(double x) {
+  if (x <= 0)
+    return 0;
+  double r = x > 1 ? x : 1;
+  for (int i = 0; i < 100; i++)
+    r = 0.5 * (r + x / r);
+  return r;
+}
+
+/* log10 of a positive integer; the series in my_ln only converges quickly for
+ * x < 10, so split off the decades first */
+static double my_log10(ll v) {
+  double m = (double)v;
+  int e = 0;
+  while (m >= 10) {
+    m /= 10;
+    e++;
+  }
+  return e + my_ln(m) / my_ln(10.0);
+}
+
+/* steps, largest entry and seed of every valid seed, so the -1 limits can be
+ * set to the bottom-2.5% rows once the whole run is known */
+static int st_all[MAX_TRIES];
+static ll pk_all[MAX_TRIES];
+static unsigned sd_all[MAX_TRIES];
+
+static char *lim_peak_str(void) {
+  static char b[24];
+  sci(b, sizeof b, lim_peak);
+  return b;
+}
 
 static char *obuf = NULL;
 static size_t olen = 0, ocap = 0;
@@ -765,9 +865,9 @@ static int trade_off(void) {
       found = 1;
     }
   if (found)
-    say("\nShown: fewest steps with max entry <= %d\n\n", LIM_PEAK);
+    say("\nShown: fewest steps with max entry <= %s\n\n", lim_peak_str());
   else
-    say("\nShown: smallest numbers (none <= %d)\n\n", LIM_PEAK);
+    say("\nShown: smallest numbers (none <= %s)\n\n", lim_peak_str());
   shrink_at = POLICY[fr[pick].pol];
   solve_plan(fr[pick].c, fr[pick].r);
   flush_out();
@@ -820,22 +920,38 @@ int plan_mode(int mode) {
   return 0;
 }
 
+static void gap_steps(char *b, size_t len, int st) {
+  if (st <= LIM_STEPS)
+    snprintf(b, len, "within limit");
+  else
+    snprintf(b, len, "%d over", st - LIM_STEPS);
+}
+
+static void gap_peak(char *b, size_t len, ll pk) {
+  if (pk <= LIM_PEAK)
+    snprintf(b, len, "within limit");
+  else
+    snprintf(b, len, "%.3gx the limit", (double)pk / LIM_PEAK);
+}
+
 int main(void) {
 
-  printf(" Input format:\n"
-         "   n seed                 n = number of variables (1-%d)\n"
-         "   a1 a2 ... an b         one line per equation: n coefficients, then "
-         "the constant\n"
-         " Integers only; use 0 for a missing variable. The system must have a "
-         " unique solution.\n"
-         " Example (2x+y=5, x-y=1):\n  2 1\n  2 1 5\n  1 -1 1\n"
-         " Seed:\n"
-         "  >0  replay that seed\n   0  random seed\n"
-         "  -1  search seeds for the best run within the limits (steps<=n^2+n, "
-         "entries<=%d)\n"
-         "  -2  fewest steps\n  -3  smallest numbers\n"
-         "  -4  size vs steps table, then the best plan with entries<=%d\n",
-         MAX, LIM_PEAK, LIM_PEAK);
+  printf(
+      " Input format:\n"
+      "   n seed                 n = number of variables (1-%d)\n"
+      "   a1 a2 ... an b         one line per equation: n coefficients, then "
+      "the constant\n"
+      " Integers only; use 0 for a missing variable. The system must have a"
+      " unique solution.\n"
+      " Example (2x+y=5, x-y=1):\n  2 1\n  2 1 5\n  1 -1 1\n"
+      " Seed:\n"
+      "  >0  replay that seed\n   0  random seed\n"
+      "  -1  search seeds for the best run within the limits (bottom 2.5%% "
+      "of steps and largest entries)\n"
+      "  -2  fewest steps\n  -3  smallest numbers\n"
+      "  -4  size vs steps table, then the best plan within the entries "
+      "limit\n",
+      MAX);
   fflush(stdout);
 
   ll seed_in;
@@ -845,6 +961,10 @@ int main(void) {
            MAX);
     return 1;
   }
+  lim_steps = (int)(n * n * (1.0 + (double)n / STEPS_DIV) + 0.5);
+  lim_peak = my_pow(10.0, PEAK_SLOPE * n - PEAK_SHIFT);
+  if (lim_peak < PEAK_FLOOR)
+    lim_peak = PEAK_FLOOR;
   for (int i = 0; i < n; i++)
     for (int j = 0; j <= n; j++)
       if (scanf("%lld", &orig[i][j]) != 1) {
@@ -873,6 +993,13 @@ int main(void) {
     unsigned ok_seed = 0;
     unsigned best_seed = 1, tries = 0;
     unsigned goal_hit = 0, skipped = 0;
+    unsigned nv = 0, steps_ok = 0, peak_ok = 0;
+    double s_st = 0, s_st2 = 0, s_lp = 0, s_lp2 = 0;
+    double psum = 0;
+    ll pmin = 0, pmax = 0;
+    ll fewest_peak = 0, lowest_peak = 0;
+    unsigned lowest_seed = 0;
+    int lowest_steps = 0;
 
     unsigned long long base = ((unsigned long long)time(NULL) * 2654435761ULL ^
                                (unsigned long long)clock() * 40503ULL) %
@@ -896,18 +1023,30 @@ int main(void) {
       if (best < 0 || st < best) {
         best = st;
         best_seed = cur;
+        fewest_peak = peak;
       }
+      if (nv == 0 || peak < lowest_peak ||
+          (peak == lowest_peak && st < lowest_steps)) {
+        lowest_peak = peak;
+        lowest_steps = st;
+        lowest_seed = cur;
+      }
+      if (nv == 0 || peak < pmin)
+        pmin = peak;
+      if (peak > pmax)
+        pmax = peak;
+      psum += (double)peak;
+      double lp = my_log10(peak > 0 ? peak : 1);
+      st_all[nv] = st;
+      pk_all[nv] = peak;
+      sd_all[nv] = cur;
+      s_st += st;
+      s_st2 += (double)st * st;
+      s_lp += lp;
+      s_lp2 += lp * lp;
+      nv++;
       if (st > worst)
         worst = st;
-      if (st <= LIM_STEPS && peak <= LIM_PEAK) {
-        ok++;
-        if (ok_steps < 0 || st < ok_steps ||
-            (st == ok_steps && peak < ok_peak)) {
-          ok_steps = st;
-          ok_peak = peak;
-          ok_seed = cur;
-        }
-      }
       sum += st;
       hist[st < HIST_MAX - 1 ? st : HIST_MAX - 1]++;
       if (st <= goal && !goal_hit)
@@ -923,37 +1062,133 @@ int main(void) {
       flush_out();
       return 1;
     }
-    say("Seeds: %u | steps min %d, mean %.1f, max %d\n", valid, best,
-        sum / valid, worst);
-    if (skipped)
-      say("Skipped (overflow): %u\n", skipped);
-    say("\n");
-    say(" Steps <=   Value   %% of seeds\n");
-    unsigned cum = 0;
-    int v = 0;
-    for (int k = 0; k <= 10; k++) {
-      int lim = goal + k * n;
-      for (; v <= lim && v < HIST_MAX; v++)
-        cum += hist[v];
-      char lab[24];
-      if (k == 0)
-        snprintf(lab, sizeof lab, "n^2");
-      else if (k == 1)
-        snprintf(lab, sizeof lab, "n^2+n");
-      else
-        snprintf(lab, sizeof lab, "n^2+%dn", k);
-      say(" %-9s %5d   %8.2f%%\n", lab, lim, 100.0 * cum / valid);
-      if (cum == valid)
-        break;
+    char e1[24], e2[24], e3[24], g1[40], g2[40];
+    double mu_st = s_st / valid, sd_st = my_sqrt(s_st2 / valid - mu_st * mu_st);
+    double mu_lp = s_lp / valid, sd_lp = my_sqrt(s_lp2 / valid - mu_lp * mu_lp);
+    const char *rule = "   ------------------------------------------------\n";
+
+    /* limits = the bottom 2.5% rows of the two tables below */
+    lim_steps = (int)(mu_st - 2 * sd_st + 1e-9);
+    lim_peak = (double)pow10_ll(mu_lp - 2 * sd_lp);
+    if (lim_peak < 1)
+      lim_peak = 1;
+    for (unsigned i = 0; i < nv; i++) {
+      int sk = st_all[i] <= LIM_STEPS, pk = (double)pk_all[i] <= LIM_PEAK;
+      steps_ok += sk;
+      peak_ok += pk;
+      if (sk && pk) {
+        ok++;
+        if (ok_steps < 0 || st_all[i] < ok_steps ||
+            (st_all[i] == ok_steps && pk_all[i] < ok_peak)) {
+          ok_steps = st_all[i];
+          ok_peak = pk_all[i];
+          ok_seed = sd_all[i];
+        }
+      }
     }
-    say("\n Within limits (entries<=%d, steps<=%d): %ld seeds\n", LIM_PEAK,
-        LIM_STEPS, ok);
+
+    /* none within both limits: take the seed closest to both, measuring each
+     * overshoot in sigmas (steps by sigma of steps, entry by sigma of its
+     * log10) and minimising the combined distance */
+    if (ok == 0) {
+      double lim_lp = mu_lp - 2 * sd_lp, dbest = 0;
+      double ssd = sd_st > 0 ? sd_st : 1, lsd = sd_lp > 0 ? sd_lp : 1;
+      for (unsigned i = 0; i < nv; i++) {
+        double ds = (st_all[i] - lim_steps) / ssd;
+        double dp = (my_log10(pk_all[i] > 0 ? pk_all[i] : 1) - lim_lp) / lsd;
+        if (ds < 0)
+          ds = 0;
+        if (dp < 0)
+          dp = 0;
+        double d = ds * ds + dp * dp;
+        if (ok_steps < 0 || d < dbest ||
+            (d == dbest && (st_all[i] < ok_steps ||
+                            (st_all[i] == ok_steps && pk_all[i] < ok_peak)))) {
+          dbest = d;
+          ok_steps = st_all[i];
+          ok_peak = pk_all[i];
+          ok_seed = sd_all[i];
+        }
+      }
+    }
+
+    say("\n SEARCH\n");
+    say("   Seeds searched   %u", tries);
+    if (skipped)
+      say("  (%u skipped: overflow)", skipped);
+    say("\n   Steps            min %d | mean %.1f | max %d\n", best,
+        sum / valid, worst);
+    sci(e1, sizeof e1, (double)pmin);
+    sci(e2, sizeof e2, psum / valid);
+    sci(e3, sizeof e3, (double)pmax);
+    say("   Largest entry    min %s | mean %s | max %s\n", e1, e2, e3);
+
+    say("\n STEPS PER SEED   (mean %.1f, sigma %.2f)\n", mu_st, sd_st);
+    say("   %-12s %10s %10s %9s\n", "Group", "Steps <=", "Seeds", "% seeds");
+    say("%s", rule);
+    for (int k = 0; k < NSTEPF; k++) {
+      int thr = (int)(mu_st + (k - 2) * sd_st + 1e-9);
+      unsigned cum = 0;
+      for (int v = 0; v < HIST_MAX && v <= thr; v++)
+        cum += hist[v];
+      say("   %-12s %10d %10u %8.2f%%\n", SIGL[k], thr, cum,
+          100.0 * cum / valid);
+    }
+
+    say("\n LARGEST ENTRY PER SEED   (geometric mean 10^%.2f, sigma %.2f "
+        "decades)\n",
+        mu_lp, sd_lp);
+    say("   %-12s %10s %10s %9s\n", "Group", "Entry <=", "Seeds", "% seeds");
+    say("%s", rule);
+    for (int k = 0; k < NFORM; k++) {
+      double lthr = mu_lp + (k - 2) * sd_lp;
+      ll pthr = pow10_ll(lthr);
+      unsigned cum = 0;
+      for (unsigned i = 0; i < nv; i++)
+        if (pk_all[i] <= pthr)
+          cum++;
+      char t[24];
+      sci(t, sizeof t, (double)pthr);
+      say("   %-12s %10s %10u %8.2f%%\n", SIGL[k], t, cum, 100.0 * cum / valid);
+    }
+
+    say("\n LIMITS\n");
+    say("   %-26s %10s %9s\n", "", "Seeds", "% seeds");
+    say(" %s", rule + 1);
+    char lab[48];
+    snprintf(lab, sizeof lab, "steps <= %d", LIM_STEPS);
+    say("   %-26s %10u %8.2f%%\n", lab, steps_ok, 100.0 * steps_ok / valid);
+    snprintf(lab, sizeof lab, "entry <= %s", lim_peak_str());
+    say("   %-26s %10u %8.2f%%\n", lab, peak_ok, 100.0 * peak_ok / valid);
+    say("   %-26s %10ld %8.2f%%\n", "both", ok, 100.0 * ok / valid);
+
+    say("\n SEEDS\n");
+    gap_steps(g1, sizeof g1, best);
+    gap_peak(g2, sizeof g2, fewest_peak);
+    sci(e1, sizeof e1, (double)fewest_peak);
+    say("   Fewest steps     seed %u\n", best_seed);
+    say("                    %d steps (%s), max entry %s (%s)\n", best, g1, e1,
+        g2);
+    gap_steps(g1, sizeof g1, lowest_steps);
+    gap_peak(g2, sizeof g2, lowest_peak);
+    sci(e1, sizeof e1, (double)lowest_peak);
+    say("   Smallest entry   seed %u\n", lowest_seed);
+    say("                    %d steps (%s), max entry %s (%s)\n", lowest_steps,
+        g1, e1, g2);
     if (ok > 0) {
-      say(" Best: seed %u, %d steps, max entry %lld\n\n", ok_seed, ok_steps,
-          ok_peak);
+      sci(e1, sizeof e1, (double)ok_peak);
+      say("   Chosen           seed %u\n", ok_seed);
+      say("                    %d steps, max entry %s (within limits)\n\n",
+          ok_steps, e1);
       best_seed = ok_seed;
     } else {
-      say(" Best: seed %u, %d steps (none within limits)\n\n", best_seed, best);
+      gap_steps(g1, sizeof g1, ok_steps);
+      gap_peak(g2, sizeof g2, ok_peak);
+      sci(e1, sizeof e1, (double)ok_peak);
+      say("   Closest to both  seed %u\n", ok_seed);
+      say("                    %d steps (%s), max entry %s (%s)\n\n", ok_steps,
+          g1, e1, g2);
+      best_seed = ok_seed;
     }
     seed = best_seed;
   } else {
